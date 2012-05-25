@@ -1,0 +1,212 @@
+#!/usr/bin/env perl
+
+=head1 NAME
+
+Move Division
+
+=head1 SYNOPSIS
+
+Moves all prints from a given list of divisions to a destination division.
+
+=head1 AUTHOR
+
+Robert Berry <robert.berry@liverpool.ac.uk>
+
+=cut
+
+use FindBin;
+use lib "$FindBin::Bin/../perl_lib";
+use EPrints;
+use Getopt::Long;
+use strict;
+
+# Minimum number of CL arguments
+use constant MIN_ARGUMENTS => 3;
+
+# Default Session noise level
+use constant DEFAULT_NOISE => 1;
+
+# Error code for invalid usage
+use constant ERRNO_USAGE => 1;
+
+# Error code for incorrect session name
+use constant ERRNO_BAD_SESSION => 2;
+
+=head1 METHODS
+
+=method usage
+
+Returns usage information and exits.
+
+=cut
+
+sub usage {
+    print "$0 <repository_id> <from...> <to> [--quiet] [--force]\n";
+    exit ERRNO_USAGE;
+}
+
+=method session_from_args
+
+Returns an EPrints session from the CL arguments.
+
+=cut
+
+sub session_from_args {
+    my $noise;
+
+    if (@_ == 1) {
+        $noise = shift @_;
+    } else {
+        $noise = DEFAULT_NOISE;
+    }
+
+    EPrints::Session->new(1, $ARGV[0], $noise);
+}
+
+=method main
+
+Moves all of the given divisions in the argument list to the destination division.
+
+=cut
+
+sub main {
+    my $quiet = 0;
+    my $verbose = 0;
+    my $force = 0;
+
+    GetOptions(
+        'quiet+' => \$quiet,
+        'force+' => \$force
+    ) || usage();
+
+    usage() if scalar @ARGV < MIN_ARGUMENTS;
+
+    $verbose = 1 - $quiet;
+    our $noise = 1 + $verbose;
+    my $session = session_from_args $noise;
+
+    unless (defined $session) {
+        print STDERR "Unable to load session for $ARGV[0]. Is this a valid repository?\n";
+        exit ERRNO_BAD_SESSION;
+    }
+
+    my (@divisions) = @ARGV[1..@ARGV-1];
+    my $destination = pop @divisions;
+
+    my $moved = 0;
+
+    for my $division (@divisions) {
+        my $prints = prints_for_division($session, $division);
+        my $count = $prints->count;
+
+        next unless $force or yes_or_no("Move $count prints from $division to $destination");
+        if ($verbose) {
+            print "Moving $count prints from $division ... ";
+        }
+        move_prints($prints, $destination);
+        $moved += $count;
+        print "Done!\n";
+    }
+
+    if ($verbose) {
+        print "Moved $moved prints.\n";
+        print "*********************************\n";
+        print "WARNING: Run bin/generate_views - your repository views will be out of date.\n";
+        print "*********************************\n";
+    }
+}
+
+=method move_print
+
+Moves an EPrint to the given division.
+
+=cut
+
+sub move_print {
+    my ($print, $destination) = @_;
+
+    $print->set_value("divisions", [$destination]);
+    $print->commit;
+}
+
+=method move_prints
+
+Moves all prints from a given EPrints result set to the destination division.
+
+=cut
+
+sub move_prints {
+    my ($prints, $destination) = @_;
+
+    $prints->map(sub {
+        my (undef, undef, $eprint) = @_;
+        move_print($eprint, $destination);
+    });
+}
+
+=method yes_or_no
+
+Asks a yes or no question, returns the answer as a boolean.
+
+=cut
+
+sub yes_or_no {
+    my $question = shift;
+
+    print $question;
+    print " (yes or no)?: ";
+
+    while (1) {
+        my $answer = <STDIN>;
+        if ($answer =~ m/y(?:es)?/i) {
+            return 1;
+        } elsif ($answer =~ m/no?/i) {
+            return 0;
+        }
+        print "Please enter 'yes' or 'no': ";
+    }
+}
+
+=method prints_for_division
+
+Returns an EPrints results set for all prints in a given division.
+
+=cut
+
+sub prints_for_division {
+    my ($session, $division) = @_;
+
+    my $dataset = $session->get_repository->get_dataset("eprint");
+
+    my $search = EPrints::Search->new(
+        session => $session,
+        dataset => $dataset,
+        satisfy_all => 1);
+
+    $search->add_field(
+        $dataset->get_field("divisions"),
+        $division);
+
+    return $search->perform_search;
+}
+
+main unless caller;
+
+=COPYRIGHT
+
+Copyright (c) 2012 The University of Liverpool
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+=cut
